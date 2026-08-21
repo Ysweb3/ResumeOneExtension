@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Resume Work",
+  "version": "1.0",
+  "description": "Captures tabs for Resume Work app",
+"host_permissions": ["<all_urls>"],
+  "permissions": ["tabs"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Send tabs to Resume Work"
+  }
+}
