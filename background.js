@@ -1,5 +1,5 @@
-chrome.action.onClicked.addListener(() => {
-    chrome.tabs.query({},(tabs) =>{
+function sendTabs() {
+     chrome.tabs.query({},(tabs) =>{
 
         const urls = tabs.map(tab => tab.url);
         console.log("sending tabs:", urls);
@@ -14,4 +14,17 @@ chrome.action.onClicked.addListener(() => {
         .catch(err => console.error("failed:", err));
         
     })
+}
+//manual click of extension
+chrome.action.onClicked.addListener(() => {
+    sendTabs()
 });
+//websocket for auto send to app
+const ws = new WebSocket("ws://localhost:8765/ws");
+ws.onmessage = (event) => {
+    if (event.data === "capture") {
+      sendTabs();
+    }
+};
+ws.onopen = () => console.log("connected to Resume Work");
+ws.onerror = (err) => console.error("ws error:", err);
