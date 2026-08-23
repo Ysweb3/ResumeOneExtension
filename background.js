@@ -15,16 +15,23 @@ function sendTabs() {
         
     })
 }
+
 //manual click of extension
 chrome.action.onClicked.addListener(() => {
     sendTabs()
 });
 //websocket for auto send to app
 const ws = new WebSocket("ws://localhost:8765/ws");
+    
+ws.onopen = () => console.log("connected to Resume Work");
 ws.onmessage = (event) => {
     if (event.data === "capture") {
-      sendTabs();
+        sendTabs();
     }
 };
-ws.onopen = () => console.log("connected to Resume Work");
+ws.onclose = () => {
+    console.log("disconnected, retrying in 3s...");
+    setTimeout(connectWS, 3000);  // retry after 3 seconds
+};
 ws.onerror = (err) => console.error("ws error:", err);
+
