@@ -1,3 +1,15 @@
+ let ws;
+ let heartbeatInterval;
+function startHeartbeat(){
+    heartbeatInterval = setInterval(() => {
+        ws.send("Heartbeat")
+        console.log("Heatbeat")
+    }, 20000);
+}
+function stopHeartbeat(){
+    clearInterval(heartbeatInterval);
+}
+
 function sendTabs() {
      chrome.tabs.query({},(tabs) =>{
         
@@ -19,9 +31,13 @@ function sendTabs() {
 }
 function connectWS() {
     //websocket for auto send to app
-    const ws = new WebSocket("ws://localhost:8765/ws");
+    ws = new WebSocket("ws://localhost:8765/ws");
      if (ws && ws.readyState === WebSocket.OPEN) return;
-    ws.onopen = () => console.log("connected to Resume Work");
+    ws.onopen = () => {
+        console.log("connected to Resume Work");
+        startHeartbeat();
+    }
+        
     ws.onmessage = (event) => {
         if (event.data === "capture") {
             sendTabs();
@@ -30,7 +46,7 @@ function connectWS() {
     ws.onclose = () => {
         console.log("disconnected, retrying in 3s...");
         setTimeout(connectWS, 3000);  // retry after 3 seconds
-        
+        stopHeartbeat();
     };
     ws.onerror = (err) => console.error("ws error:", err);
 }
@@ -48,7 +64,6 @@ function getBrowserFromBrands() {
   // Fallback to legacy string checking if API is unsupported
   return getDetailedBrowserName(); 
 }
-
 
 //manual click of extension
 chrome.action.onClicked.addListener(() => {
