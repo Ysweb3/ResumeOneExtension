@@ -1,15 +1,5 @@
  let ws;
- let heartbeatInterval;
-function startHeartbeat(){
-    heartbeatInterval = setInterval(() => {
-        ws.send("Heartbeat")
-        console.log("Heatbeat")
-    }, 20000);
-}
-function stopHeartbeat(){
-    clearInterval(heartbeatInterval);
-}
-
+ 
 function sendTabs() {
      chrome.tabs.query({},(tabs) =>{
         
@@ -31,11 +21,10 @@ function sendTabs() {
 }
 function connectWS() {
     //websocket for auto send to app
+    if (ws && ws.readyState === WebSocket.OPEN) return;
     ws = new WebSocket("ws://localhost:8765/ws");
-     if (ws && ws.readyState === WebSocket.OPEN) return;
     ws.onopen = () => {
         console.log("connected to Resume Work");
-        startHeartbeat();
     }
         
     ws.onmessage = (event) => {
@@ -46,7 +35,6 @@ function connectWS() {
     ws.onclose = () => {
         console.log("disconnected, retrying in 3s...");
         setTimeout(connectWS, 3000);  // retry after 3 seconds
-        stopHeartbeat();
     };
     ws.onerror = (err) => console.error("ws error:", err);
 }
@@ -61,8 +49,6 @@ function getBrowserFromBrands() {
     if (brands.includes("brave")) return "brave";
 
   }
-  // Fallback to legacy string checking if API is unsupported
-  return getDetailedBrowserName(); 
 }
 
 //manual click of extension
@@ -72,3 +58,10 @@ chrome.action.onClicked.addListener(() => {
 console.log(getBrowserFromBrands());
 
 connectWS();
+
+// MV3 kills this service worker after ~30s idle, dropping ws + its timers with it.
+// chrome.alarms is the only thing guaranteed to wake it back up on a schedule.
+chrome.alarms.create("ws-keepalive", { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === "ws-keepalive") connectWS();
+});

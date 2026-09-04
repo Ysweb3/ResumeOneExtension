@@ -4,7 +4,7 @@
   "version": "1.0",
   "description": "Captures tabs for Resume One app",
 "host_permissions": ["<all_urls>"],
-  "permissions": ["tabs"],
+  "permissions": ["tabs", "alarms"],
   "background": {
     "service_worker": "background.js",
     "type":"module"
