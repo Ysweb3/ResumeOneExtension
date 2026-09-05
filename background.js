@@ -1,5 +1,15 @@
  let ws;
- 
+ let heartbeatInterval;
+function startHeartbeat(){
+    heartbeatInterval = setInterval(() => {
+        ws.send("Heartbeat")
+        console.log("Heatbeat")
+    }, 20000);
+}
+function stopHeartbeat(){
+    clearInterval(heartbeatInterval);
+}
+
 function sendTabs() {
      chrome.tabs.query({},(tabs) =>{
         
@@ -25,6 +35,7 @@ function connectWS() {
     ws = new WebSocket("ws://localhost:8765/ws");
     ws.onopen = () => {
         console.log("connected to Resume Work");
+         startHeartbeat();
     }
         
     ws.onmessage = (event) => {
@@ -35,6 +46,7 @@ function connectWS() {
     ws.onclose = () => {
         console.log("disconnected, retrying in 3s...");
         setTimeout(connectWS, 3000);  // retry after 3 seconds
+        stopHeartbeat()
     };
     ws.onerror = (err) => console.error("ws error:", err);
 }
