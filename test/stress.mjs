@@ -32,7 +32,7 @@ async function fakeApp(port = 0) {
     req.on("end", () => {
       if (req.method === "POST" && req.url === "/tabs") {
         app.posts.push(body);
-        res.writeHead(app.mode.tabsStatus || 200);
+        res.writeHead(app.mode.failNext-- > 0 ? 500 : 200);
         return res.end();
       }
       res.end(req.url === "/project" ? "demo" : "");
@@ -61,7 +61,11 @@ async function fakeApp(port = 0) {
         for (let i = 0; i < len; i++) data[i] ^= buf[off + (i & 3)];
         const op = buf[0] & 15;
         buf = buf.subarray(off + 4 + len);
-        if (op === 1) app.msgs.push(data.toString());
+        if (op === 1) {
+          app.msgs.push(data.toString());
+          // the real app echoes heartbeats; noEcho plays an app from before that
+          if (data.toString() === "Heartbeat" && !app.mode.noEcho) sock.write(frame(1, "Heartbeat"));
+        }
         if (op === 8) sock.end(frame(8, ""));
       }
     });
@@ -165,35 +169,39 @@ await scenario("app accepts TCP but never finishes handshake", async (app, load)
 await scenario("app frozen (stops reading, socket stays up)", async (app, load) => {
   const ext = load();
   await until(() => app.socks.size, 2000);
+  await until(() => app.msgs.includes("Heartbeat"), 25000); // it has seen an echo
   app.mode.frozen = true;
-  await sleep(90000);
-  const blind = ext.sockets.length === 1 && ext.last().readyState === 1;
-  return [!blind, blind ? "90s of heartbeats into a dead app; extension still thinks it is connected (no reply/pong is ever expected)"
-    : "noticed the dead app"];
+  const took = await until(() => ext.sockets.length > 1, 90000);
+  return [took !== null, took === null ? "90s of heartbeats into a dead app; extension still thinks it is connected"
+    : `dropped the hung socket and redialled after ~${Math.round(took / 1000)}s`];
 });
 
-await scenario("POST /tabs answered with 500", async (app, load) => {
+await scenario("old app that never echoes: no flapping", async (app, load) => {
+  app.mode.noEcho = true;
+  const ext = load();
+  await sleep(120000);
+  return [ext.sockets.length === 1 && ext.last().readyState === 1, `${ext.sockets.length} socket(s) over 2 min of silence`];
+});
+
+await scenario("POST /tabs answered with 500 once", async (app, load) => {
   const ext = load();
   await until(() => app.socks.size, 2000);
-  app.mode.tabsStatus = 500;
+  app.mode.failNext = 1;
   app.send("capture");
-  await until(() => app.posts.length, 2000);
+  await until(() => app.posts.length === 2, 10000);
   await real(100);
-  const silent = ext.errors.length === 0 && ext.logs.includes("tabs");
-  return [!silent, silent ? `logged as success, no retry; ${app.posts.length} post(s) - the checkpoint silently has no tabs`
-    : `errors: ${ext.errors.join(" | ")}`];
+  const ok = ext.errors.some(e => e.includes("app answered 500")) && ext.logs.includes("tabs sent") && app.posts.length === 2;
+  return [ok, `${app.posts.length} post(s); errors: ${ext.errors.join(" | ") || "none"}; success logged: ${ext.logs.includes("tabs sent")}`];
 });
 
-await scenario("capture arrives while app is going down", async (app, load) => {
+await scenario("capture while app goes down is reported as failed", async (app, load) => {
   const ext = load();
   await until(() => app.socks.size, 2000);
   app.send("capture");
   await app.kill(); // POST races the shutdown and loses
-  await real(200);
-  await app.start();
-  await until(() => app.socks.size, 5000);
-  await sleep(3000);
-  return [app.posts.length > 0, app.posts.length ? "tabs arrived after restart" : `tabs lost, not re-sent on reconnect (errors: ${ext.errors.length})`];
+  await sleep(10000); // first try and the retry both land on nothing
+  const failed = ext.errors.filter(e => e.startsWith("sending tabs failed")).length;
+  return [failed === 2 && !ext.logs.includes("tabs sent"), `${failed} failure(s) logged (try + one retry), success logged: ${ext.logs.includes("tabs sent")}`];
 });
 
 await scenario("hostile/garbage {open} payloads", async (app, load) => {
@@ -205,16 +213,17 @@ await scenario("hostile/garbage {open} payloads", async (app, load) => {
   app.send("capture");
   await until(() => app.posts.length, 2000);
   const bad = ext.created.filter(u => !/^https?:\/\//.test(String(u)));
-  return [bad.length === 0 && app.posts.length === 1,
-    `survived=${app.posts.length === 1}; would open non-web urls: ${JSON.stringify(bad)}`];
+  return [bad.length === 0 && ext.created.length === 1 && app.posts.length === 1,
+    `survived=${app.posts.length === 1}; opened ${JSON.stringify(ext.created)}`];
 });
 
 await scenario("resume flood: {open} with 2000 urls", async (app, load) => {
   const ext = load();
   await until(() => app.socks.size, 2000);
-  app.send(JSON.stringify({ open: Array.from({ length: 2000 }, (_, i) => `https://flood.test/${i}`) }));
-  await until(() => ext.created.length === 2000, 2000);
-  return [ext.created.length < 2000, `${ext.created.length} tabs created in one go, no cap or dedupe of the list itself`];
+  const urls = Array.from({ length: 2000 }, (_, i) => `https://flood.test/${i % 1000}`);
+  app.send(JSON.stringify({ open: urls }));
+  await sleep(2000);
+  return [ext.created.length === 100 && new Set(ext.created).size === 100, `${ext.created.length} tabs created (cap 100, list deduped)`];
 });
 
 await scenario("capture storm: 200 pushes", async (app, load) => {
