@@ -33,12 +33,14 @@ function sendTabs() {
 // open only the saved urls that are not already a tab, as background tabs in the window the
 // user is already in - the browser is running, so a fresh window is just clutter.
 // ponytail: exact string match - a tab that navigated to a fragment/redirect won't match.
-function openMissing(urls) {
+// replies {"opened":n} on the same socket so the app can say "already open" instead of "launched"
+function openMissing(urls, sock) {
     chrome.tabs.query({}, (tabs) => {
         const open = new Set(tabs.map(t => t.url));
         const missing = urls.filter(u => !open.has(u));
         console.log("resume: opening", missing.length, "of", urls.length, "urls");
         missing.forEach(url => chrome.tabs.create({ url, active: false }));
+        if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ opened: missing.length }));
     });
 }
 function connectWS() {
@@ -64,7 +66,7 @@ function connectWS() {
         // browser exe, because only we can see which of them are already open
         try {
             const msg = JSON.parse(event.data);
-            if (Array.isArray(msg.open)) openMissing(msg.open);
+            if (Array.isArray(msg.open)) openMissing(msg.open, sock);
         } catch (e) { /* not json - heartbeat echo or unknown message */ }
     };
     sock.onclose = () => {
