@@ -34,7 +34,7 @@ function sendTabs(retry = true) {
             headers:{
                 "Content-Type":"application/json"
             },
-            body: JSON.stringify({browser:getBrowserFromBrands(),urls:urls})
+            body: JSON.stringify({browser:getBrowserFromBrands(),profile:profile,urls:urls})
               
         })
         .then(res => {
@@ -50,6 +50,7 @@ function sendTabs(retry = true) {
         
     })
 }
+let opening = Promise.resolve();
 // youtube's playlist &index= drifts as the playlist plays (6 -> 7) while v/list stay put, so the
 // same tab stopped matching its saved url and resume opened a duplicate. Drop it - youtube
 // recomputes the position from v + list anyway.
@@ -69,17 +70,48 @@ function trimUrl(url) {
 // never javascript:, file: or chrome: - and never more than MAX_OPEN in one go.
 // ponytail: 100 is a guess at "bigger than any real project"; raise it if one isn't.
 // replies {"opened":n} on the same socket so the app can say "already open" instead of "launched"
+// then opens one tab at a time: the next starts only once the last has loaded, so a big resume
+// is not thirty page loads at once. queued, so a second resume waits for the first to finish.
 const MAX_OPEN = 100;
 function openMissing(urls, sock) {
-    chrome.tabs.query({}, (tabs) => {
-        const open = new Set(tabs.map(t => trimUrl(t.url)));
+    opening = opening.then(async () => {
+        const open = new Set((await chrome.tabs.query({})).map(t => trimUrl(t.url)));
         const missing = [...new Set(urls)]
             .filter(u => typeof u === "string" && /^https?:\/\//i.test(u) && !open.has(trimUrl(u)))
             .slice(0, MAX_OPEN);
         console.log("resume: opening", missing.length, "of", urls.length, "urls");
-        missing.forEach(url => chrome.tabs.create({ url, active: false }));
+        // the count goes now - the app waits 2s for it, not for every page to load
         if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ opened: missing.length }));
+        for (const url of missing) {
+            const tab = await chrome.tabs.create({ url, active: false });
+            await loaded(tab.id, 15000);
+        }
+    }).catch(err => console.error("resume failed:", err));
+}
+// ponytail: a page that never finishes (or a tab closed mid-load) costs the full cap
+function loaded(tabId, capMs) {
+    return new Promise(resolve => {
+        const done = () => {
+            clearTimeout(timer);
+            chrome.tabs.onUpdated.removeListener(onUpdated);
+            resolve();
+        };
+        const onUpdated = (id, info) => { if (id === tabId && info.status === "complete") done(); };
+        const timer = setTimeout(done, capMs);
+        chrome.tabs.onUpdated.addListener(onUpdated);
     });
+}
+
+// each browser profile runs its own copy of this extension; the signed-in email tells the app
+// which one, so it keeps tabs per profile and starts the browser in the right one on resume.
+// "" when the profile is signed in to nothing (or the browser has no identity api).
+let profile;  // undefined until read - connectWS waits for it, so the socket url is never wrong
+async function getProfile() {
+    try {
+        return (await chrome.identity.getProfileUserInfo({ accountStatus: "ANY" })).email || "";
+    } catch (e) {
+        return "";
+    }
 }
 function connectWS() {
     //websocket for auto send to app
@@ -87,9 +119,11 @@ function connectWS() {
     // let the 3s retry and the 1min alarm each open their own socket, so the app saw two
     // extensions from one browser and the orphan died later at its own pace.
     if (ws && ws.readyState !== WebSocket.CLOSED) return;
+    if (profile === undefined) return;  // the read below connects once it lands
     // brand goes in the url so the app knows which browser this socket belongs to at connect
     // time, rather than only after the first /tabs post
-    const sock = ws = new WebSocket("ws://localhost:8765/ws?browser=" + encodeURIComponent(getBrowserFromBrands() || ""));
+    const sock = ws = new WebSocket("ws://localhost:8765/ws?browser=" + encodeURIComponent(getBrowserFromBrands() || "")
+        + "&profile=" + encodeURIComponent(profile));
     sock.onopen = () => {
         console.log("connected to Resume Work");
         startHeartbeat(sock);
@@ -138,7 +172,11 @@ function getBrowserFromBrands() {
 // The socket path below is untouched - the app still pushes "capture" to sendTabs().
 console.log(getBrowserFromBrands());
 
-connectWS();
+getProfile().then(p => { profile = p; connectWS(); });
+
+// a listener is what makes the browser start this worker when it (or a profile) opens, so a
+// browser that resume just launched connects at once and gets the rest of its tabs
+chrome.runtime.onStartup.addListener(() => {});
 
 // MV3 kills this service worker after ~30s idle, dropping ws + its timers with it.
 // chrome.alarms is the only thing guaranteed to wake it back up on a schedule.

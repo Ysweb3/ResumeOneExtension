@@ -79,7 +79,7 @@ async function fakeApp(port = 0) {
 }
 
 function loadExtension(port, tabs = ["https://a.test/", "https://b.test/", "chrome://newtab/"]) {
-  const ext = { sockets: [], created: [], logs: [], errors: [], timers: new Set() };
+  const ext = { sockets: [], created: [], logs: [], errors: [], timers: new Set(), onUpdated: new Set() };
   const to = u => u.replace("localhost:8765", `127.0.0.1:${port}`);
   class WS extends WebSocket { constructor(u) { super(to(u)); ext.sockets.push(this); } }
   const timer = (fn, ms, every) => { const h = (every ? setInterval : setTimeout)(fn, ms * SCALE); ext.timers.add(h); return h; };
@@ -90,7 +90,18 @@ function loadExtension(port, tabs = ["https://a.test/", "https://b.test/", "chro
     console: { log: (...a) => ext.logs.push(a.join(" ")), error: (...a) => ext.errors.push(a.join(" ")) },
     setTimeout: (f, ms) => timer(f, ms), setInterval: (f, ms) => timer(f, ms, true), clearTimeout, clearInterval,
     chrome: {
-      tabs: { query: (_q, cb) => cb(tabs.map(url => ({ url }))), create: ({ url }) => ext.created.push(url) },
+      // callback and promise forms; every created tab reports "complete" on the next tick
+      tabs: {
+        query: (_q, cb) => { const t = tabs.map(url => ({ url })); return cb ? cb(t) : Promise.resolve(t); },
+        create: ({ url }) => {
+          const id = ext.created.push(url);
+          setTimeout(() => ext.onUpdated.forEach(f => f(id, { status: "complete" })));
+          return Promise.resolve({ id, url });
+        },
+        onUpdated: { addListener: f => ext.onUpdated.add(f), removeListener: f => ext.onUpdated.delete(f) },
+      },
+      identity: { getProfileUserInfo: async () => ({ email: "" }) },
+      runtime: { onStartup: { addListener() {} } },
       alarms: { create() {}, onAlarm: { addListener: f => ext.alarm = f } },
     },
   });
@@ -128,7 +139,7 @@ await scenario("connect, heartbeat, capture -> POST /tabs", async (app, load) =>
   app.send("capture");
   await until(() => app.posts.length, 2000);
   const post = JSON.parse(app.posts[0] ?? "{}");
-  const ok = app.connects[0] === "/ws?browser=Chrome" && app.msgs.includes("Heartbeat") && post.browser === "Chrome" && post.urls?.length === 3;
+  const ok = app.connects[0] === "/ws?browser=Chrome&profile=" && app.msgs.includes("Heartbeat") && post.browser === "Chrome" && post.urls?.length === 3;
   return [ok, `url=${app.connects[0]} heartbeat=${app.msgs.includes("Heartbeat")} post=${app.posts[0]}`];
 });
 
@@ -222,6 +233,8 @@ await scenario("resume flood: {open} with 2000 urls", async (app, load) => {
   await until(() => app.socks.size, 2000);
   const urls = Array.from({ length: 2000 }, (_, i) => `https://flood.test/${i % 1000}`);
   app.send(JSON.stringify({ open: urls }));
+  // tabs open one at a time now, so wait for the queue to reach the cap, then check it stops there
+  await until(() => ext.created.length >= 100, 30000);
   await sleep(2000);
   return [ext.created.length === 100 && new Set(ext.created).size === 100, `${ext.created.length} tabs created (cap 100, list deduped)`];
 });
