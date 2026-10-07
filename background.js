@@ -26,7 +26,7 @@ function dropStale(sock) {
 function sendTabs(retry = true) {
      chrome.tabs.query({},(tabs) =>{
         
-        const urls = tabs.map(tab => tab.url);
+        const urls = tabs.map(tab => trimUrl(tab.url));
         console.log("sending tabs:", urls);
         console.log("sending browser name:", getBrowserFromBrands());
         fetch("http://localhost:8765/tabs",{
@@ -50,21 +50,35 @@ function sendTabs(retry = true) {
         
     })
 }
+// youtube's playlist &index= drifts as the playlist plays (6 -> 7) while v/list stay put, so the
+// same tab stopped matching its saved url and resume opened a duplicate. Drop it - youtube
+// recomputes the position from v + list anyway.
+function trimUrl(url) {
+    try {
+        const u = new URL(url);
+        if (!/(^|\.)youtube\.com$/.test(u.hostname) || !u.searchParams.has("index")) return url;
+        u.searchParams.delete("index");
+        return u.toString();
+    } catch (e) { return url; }  // chrome://, about:blank etc. - leave as is
+}
 // open only the saved urls that are not already a tab, as background tabs in the window the
 // user is already in - the browser is running, so a fresh window is just clutter.
-// ponytail: exact string match - a tab that navigated to a fragment/redirect won't match.
+// both sides go through trimUrl so urls saved before the trim still match.
+// ponytail: otherwise exact string match - a tab that navigated to a fragment/redirect won't match.
 // whatever is listening on :8765 can send {"open":[...]}, so only web pages are opened -
 // never javascript:, file: or chrome: - and never more than MAX_OPEN in one go.
 // ponytail: 100 is a guess at "bigger than any real project"; raise it if one isn't.
+// replies {"opened":n} on the same socket so the app can say "already open" instead of "launched"
 const MAX_OPEN = 100;
-function openMissing(urls) {
+function openMissing(urls, sock) {
     chrome.tabs.query({}, (tabs) => {
-        const open = new Set(tabs.map(t => t.url));
+        const open = new Set(tabs.map(t => trimUrl(t.url)));
         const missing = [...new Set(urls)]
-            .filter(u => typeof u === "string" && /^https?:\/\//i.test(u) && !open.has(u))
+            .filter(u => typeof u === "string" && /^https?:\/\//i.test(u) && !open.has(trimUrl(u)))
             .slice(0, MAX_OPEN);
         console.log("resume: opening", missing.length, "of", urls.length, "urls");
         missing.forEach(url => chrome.tabs.create({ url, active: false }));
+        if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ opened: missing.length }));
     });
 }
 function connectWS() {
@@ -95,7 +109,7 @@ function connectWS() {
         // browser exe, because only we can see which of them are already open
         try {
             const msg = JSON.parse(event.data);
-            if (Array.isArray(msg.open)) openMissing(msg.open);
+            if (Array.isArray(msg.open)) openMissing(msg.open, sock);
         } catch (e) { /* not json - unknown message */ }
     };
     sock.onclose = () => {
