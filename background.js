@@ -1,17 +1,29 @@
  let ws;
  let heartbeatInterval;
-function startHeartbeat(){
+// the app echoes every Heartbeat. A hung app keeps its socket OPEN as far as the browser
+// knows, so a socket that has echoed before and then misses two in a row is dropped and
+// redialled. Never-echoed sockets are trusted as before, so an older app does not flap.
+function startHeartbeat(sock){
     stopHeartbeat();
+    sock.missed = 0;
     heartbeatInterval = setInterval(() => {
-        ws.send("Heartbeat")
-        console.log("Heatbeat")
+        if (sock.echoes && sock.missed >= 2) return dropStale(sock);
+        sock.missed++;
+        sock.send("Heartbeat");
     }, 20000);
 }
 function stopHeartbeat(){
     clearInterval(heartbeatInterval);
 }
+function dropStale(sock) {
+    console.log("app stopped answering, reconnecting");
+    ws = null;  // its onclose now sees an orphan and stays quiet
+    stopHeartbeat();
+    sock.close();
+    connectWS();
+}
 
-function sendTabs() {
+function sendTabs(retry = true) {
      chrome.tabs.query({},(tabs) =>{
         
         const urls = tabs.map(tab => trimUrl(tab.url));
@@ -25,8 +37,16 @@ function sendTabs() {
             body: JSON.stringify({browser:getBrowserFromBrands(),urls:urls})
               
         })
-        .then(() => console.log("tabs"))
-        .catch(err => console.error("failed:", err));
+        .then(res => {
+            if (!res.ok) throw new Error("app answered " + res.status);
+            console.log("tabs sent");
+        })
+        .catch(err => {
+            console.error("sending tabs failed:", err);
+            // one retry rides out a blip; an app that is gone stays gone and the
+            // checkpoint shows no tabs, which is at least visible in the app
+            if (retry) setTimeout(() => sendTabs(false), 3000);
+        });
         
     })
 }
@@ -45,11 +65,17 @@ function trimUrl(url) {
 // user is already in - the browser is running, so a fresh window is just clutter.
 // both sides go through trimUrl so urls saved before the trim still match.
 // ponytail: otherwise exact string match - a tab that navigated to a fragment/redirect won't match.
+// whatever is listening on :8765 can send {"open":[...]}, so only web pages are opened -
+// never javascript:, file: or chrome: - and never more than MAX_OPEN in one go.
+// ponytail: 100 is a guess at "bigger than any real project"; raise it if one isn't.
 // replies {"opened":n} on the same socket so the app can say "already open" instead of "launched"
+const MAX_OPEN = 100;
 function openMissing(urls, sock) {
     chrome.tabs.query({}, (tabs) => {
         const open = new Set(tabs.map(t => trimUrl(t.url)));
-        const missing = urls.filter(u => !open.has(trimUrl(u)));
+        const missing = [...new Set(urls)]
+            .filter(u => typeof u === "string" && /^https?:\/\//i.test(u) && !open.has(trimUrl(u)))
+            .slice(0, MAX_OPEN);
         console.log("resume: opening", missing.length, "of", urls.length, "urls");
         missing.forEach(url => chrome.tabs.create({ url, active: false }));
         if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ opened: missing.length }));
@@ -66,10 +92,15 @@ function connectWS() {
     const sock = ws = new WebSocket("ws://localhost:8765/ws?browser=" + encodeURIComponent(getBrowserFromBrands() || ""));
     sock.onopen = () => {
         console.log("connected to Resume Work");
-         startHeartbeat();
+        startHeartbeat(sock);
     }
         
     sock.onmessage = (event) => {
+        sock.missed = 0;  // anything from the app proves it is alive
+        if (event.data === "Heartbeat") {
+            sock.echoes = true;
+            return;
+        }
         if (event.data === "capture") {
             sendTabs();
             return;
@@ -79,7 +110,7 @@ function connectWS() {
         try {
             const msg = JSON.parse(event.data);
             if (Array.isArray(msg.open)) openMissing(msg.open, sock);
-        } catch (e) { /* not json - heartbeat echo or unknown message */ }
+        } catch (e) { /* not json - unknown message */ }
     };
     sock.onclose = () => {
         if (ws !== sock) return;  // an orphan closing must not schedule its own reconnect
