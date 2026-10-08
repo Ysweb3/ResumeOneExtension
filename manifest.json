@@ -3,13 +3,20 @@
   "name": "Resume One",
   "version": "1.0",
   "description": "Captures tabs for Resume One app",
-"host_permissions": ["<all_urls>"],
-  "permissions": ["tabs", "alarms", "identity", "identity.email"],
+  "host_permissions": [
+  ],
+  "permissions": [
+    "tabs",
+    "alarms",
+    "identity",
+    "identity.email"
+  ],
   "background": {
     "service_worker": "background.js",
-    "type":"module"
+    "type": "module"
   },
   "action": {
-    "default_title": "Send tabs to Resume One"
+    "default_title": "Send tabs to Resume One",
+    "default_popup": "popup.html"
   }
 }

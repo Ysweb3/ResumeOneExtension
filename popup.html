@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<!-- Extension popup — artboard 1j of the Resume Work HUD v2 design.
+     Adding this replaces chrome.action.onClicked (Chrome suppresses that once a
+     popup is set), so "Send tabs now" here is the manual capture path. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+@font-face { font-family: "Sora"; src: url("fonts/Sora-Regular.ttf"); font-weight: 400; }
+@font-face { font-family: "Sora"; src: url("fonts/Sora-Bold.ttf"); font-weight: 700; }
+@font-face { font-family: "Space Mono"; src: url("fonts/SpaceMono-Regular.ttf"); font-weight: 400; }
+
+:root {
+  --g:#0B0C0D; --g1:#111315; --g2:#171A1D; --g3:#212529;
+  --ln:#333A40; --ln2:#454E56;
+  --tx:#E8D8C9; --tx2:#A99B8D; --tx3:#8E8A86; /* muted text: 5.4:1 on --g1 (#6F655C was 3.3) */
+  --hud:#7A94BC; --go:#F3701E; --goi:#1A0C03;
+  --ck:#4B607F; --ckt:#7A94BC; --ckq:#171C23;
+  --live:#8B9E7C; --bad:#C0453A;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; width: 360px; height: 420px;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--g); font-family: Sora, system-ui, sans-serif;
+}
+
+.bar {
+  height: 38px; flex: 0 0 38px; display: flex; align-items: center; gap: 9px;
+  padding: 0 12px; background: var(--g1); border-bottom: 1px solid var(--ln);
+}
+.mark { width: 14px; height: 14px; flex: 0 0 14px; }
+.wordmark { font: 700 12px/1.2 Sora, system-ui, sans-serif; letter-spacing: -.03em; color: var(--tx); }
+.wordmark i { color: var(--go); font-style: normal; }
+.spacer { flex: 1; }
+.dot { width: 7px; height: 7px; border-radius: 999px; background: var(--tx3); flex: 0 0 7px; }
+.dot.live { background: var(--live); box-shadow: 0 0 8px -1px var(--live); }   /* steady, like the app's title-bar dot: no breathing */
+.port { font: 400 12px/1.4 "Space Mono", monospace; color: var(--tx3); }
+
+.body {
+  flex: 1; min-height: 0; padding: 14px 12px 0;
+  display: flex; flex-direction: column; gap: 9px; overflow: hidden;
+}
+.lede { font: 400 12px/1.4 Sora, system-ui, sans-serif; color: var(--tx2); }
+.lede b { font-weight: 400; color: var(--tx); }
+
+.tabs { display: flex; flex-direction: column; gap: 9px; overflow-y: auto; min-height: 0; }
+.tab {
+  display: flex; align-items: center; gap: 9px; height: 34px; flex: 0 0 34px;
+  padding: 0 10px; background: var(--g2); border: 1px solid var(--ln);
+  border-radius: 7px; cursor: pointer;
+}
+.tab.off { background: var(--g1); }
+.box {
+  width: 13px; height: 13px; flex: 0 0 13px; display: grid; place-items: center;
+  background: var(--tx); border-radius: 3px;   /* ink, not orange: orange is only ever Resume */
+}
+.box svg { stroke: var(--g); }
+.tab.off .box { background: none; border: 1px solid var(--ln2); }
+.tab.off .box svg { display: none; }
+.url {
+  min-width: 0; font: 400 12px/1.3 "Space Mono", monospace; color: var(--tx);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tab.off .url { color: var(--tx3); }
+
+.more {
+  display: flex; align-items: center; gap: 11px; height: 44px; flex: 0 0 44px;
+  padding: 0 14px; background: var(--g1); border: 1px solid var(--ln);
+  border-radius: 13px; cursor: pointer;
+}
+.more:hover { background: var(--g2); border-color: var(--ln2); }
+.more[hidden] { display: none; }   /* display:flex above out-ranks the hidden attribute */
+.more .label { font: 500 13px/1 Sora, system-ui, sans-serif; color: var(--tx); }
+.more .excluded { font: 400 12px/1.4 "Space Mono", monospace; color: var(--tx2); }
+
+.foot {
+  padding: 12px; display: flex; flex-direction: column; gap: 9px;
+  border-top: 1px solid var(--ln);
+}
+.send {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; height: 34px; border: 0; border-radius: 7px;
+  background: var(--ck); color: var(--tx);
+  font: 500 13px/1 Sora, system-ui, sans-serif; cursor: pointer;
+}
+.send:hover { background: #7A94BC; color: var(--goi); }
+.send:disabled { background: var(--g2); color: var(--tx3); cursor: default; }
+.status { font: 400 12px/1.4 "Space Mono", monospace; color: var(--tx3); }
+
+/* keyboard focus: a neutral ring, only when it came from the keyboard */
+.tab:focus-visible, .more:focus-visible, .send:focus-visible {
+  outline: 2px solid #8E939C; outline-offset: 2px;
+}
+.status.bad { color: #D96C5E; }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <svg class="mark" viewBox="0 0 32 32" fill="none">
+      <rect x="5" y="6.5" width="4.6" height="19" rx="2.3" fill="#4B607F"></rect>
+      <path d="M15.2 8.6 26.4 16 15.2 23.4Z" fill="#F3701E" stroke="#F3701E" stroke-width="2.6" stroke-linejoin="round"></path>
+    </svg>
+    <span class="wordmark">coldstart<i>.</i></span>
+    <span class="spacer"></span>
+    <span class="dot" id="dot"></span>
+    <span class="port" id="conn">checking…</span>
+  </div>
+
+  <div class="body">
+    <span class="lede" id="lede">Reading tabs…</span>
+    <div class="tabs" id="tabs"></div>
+    <div class="more" id="more" role="button" tabindex="0" hidden>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#7A94BC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6F655C" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20a15 15 0 0 1 0-20"/></svg>
+      <span class="label" id="moreLabel"></span>
+      <span class="spacer"></span>
+      <span class="excluded" id="excluded"></span>
+    </div>
+  </div>
+
+  <div class="foot">
+    <button class="send" id="send">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v16z"/><path d="M16 8h6"/><path d="M19 5v6"/></svg>
+      Send tabs now
+    </button>
+    <span class="status" id="status" role="status" aria-live="polite"></span>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
