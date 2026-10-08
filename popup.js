@@ -96,6 +96,16 @@ els.more.addEventListener("keydown", e => {
   if (e.key === " " || e.key === "Enter") { e.preventDefault(); els.more.click(); }
 });
 
+// which profile these tabs are from, as background.js says it: the email when the browser
+// gives one, and the id background.js keeps in this profile's storage (the popup shares it).
+// Without them the app filed popup sends under plain "Chrome", apart from the profile's list.
+async function whoAmI() {
+  let profile = "", pid = "";
+  try { profile = (await chrome.identity.getProfileUserInfo({ accountStatus: "ANY" })).email || ""; } catch (e) {}
+  try { pid = (await chrome.storage.local.get("rwProfileId")).rwProfileId || ""; } catch (e) {}
+  return { profile, pid };
+}
+
 els.send.addEventListener("click", async () => {
   const kept = urls.filter(u => !dropped.has(u));
   els.send.disabled = true;
@@ -105,7 +115,7 @@ els.send.addEventListener("click", async () => {
     await fetch(`${APP}/tabs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ browser: browserName(), urls: kept }),
+      body: JSON.stringify({ browser: browserName(), ...(await whoAmI()), urls: kept }),
     });
     els.status.textContent = `sent ${kept.length} tabs to ${project}`;
   } catch (err) {
