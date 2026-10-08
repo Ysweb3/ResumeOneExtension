@@ -102,6 +102,19 @@ function loaded(tabId, capMs) {
     });
 }
 
+// checkpoint & close: {"close":[urls]} closes the tabs the checkpoint just saved for this
+// profile, and nothing else. A window left with no tabs closes with them.
+// ponytail: chrome.tabs.remove skips a page's "leave site?" prompt; pages that autosave
+// (docs, mail) are fine, an unsent form is not - ask before removing if that ever bites
+function closeTabs(urls) {
+    const want = new Set(urls.filter(u => typeof u === "string").map(trimUrl));
+    chrome.tabs.query({}, tabs => {
+        const ids = tabs.filter(t => want.has(trimUrl(t.url))).map(t => t.id);
+        console.log("close: closing", ids.length, "tabs");
+        if (ids.length) chrome.tabs.remove(ids);
+    });
+}
+
 // each browser profile runs its own copy of this extension; the signed-in email tells the app
 // which one, so it keeps tabs per profile and starts the browser in the right one on resume.
 // "" when the profile is signed in to nothing (or the browser has no identity api).
@@ -144,6 +157,7 @@ function connectWS() {
         try {
             const msg = JSON.parse(event.data);
             if (Array.isArray(msg.open)) openMissing(msg.open, sock);
+            if (Array.isArray(msg.close)) closeTabs(msg.close);
         } catch (e) { /* not json - unknown message */ }
     };
     sock.onclose = () => {
