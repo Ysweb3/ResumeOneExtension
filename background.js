@@ -34,7 +34,7 @@ function sendTabs(retry = true) {
             headers:{
                 "Content-Type":"application/json"
             },
-            body: JSON.stringify({browser:getBrowserFromBrands(),profile:profile,urls:urls})
+            body: JSON.stringify({browser:getBrowserFromBrands(),profile:profile,pid:profileId,urls:urls})
               
         })
         .then(res => {
@@ -126,6 +126,22 @@ async function getProfile() {
         return "";
     }
 }
+// a profile the browser gives no email for (one signed in on the web only, or not at all)
+// still needs telling apart: each profile keeps its own extension storage, so a random id
+// made once and kept there names this profile for good. The app finds which profile folder
+// holds it, which gives it the profile's name and the --profile-directory to start it in.
+let profileId = "";
+async function getProfileId() {
+    try {
+        const { rwProfileId } = await chrome.storage.local.get("rwProfileId");
+        if (rwProfileId) return rwProfileId;
+        const id = crypto.randomUUID();
+        await chrome.storage.local.set({ rwProfileId: id });
+        return id;
+    } catch (e) {
+        return "";
+    }
+}
 function connectWS() {
     //websocket for auto send to app
     // CONNECTING and CLOSING count as "a socket already exists" too - only checking OPEN
@@ -136,7 +152,7 @@ function connectWS() {
     // brand goes in the url so the app knows which browser this socket belongs to at connect
     // time, rather than only after the first /tabs post
     const sock = ws = new WebSocket("ws://localhost:8765/ws?browser=" + encodeURIComponent(getBrowserFromBrands() || "")
-        + "&profile=" + encodeURIComponent(profile));
+        + "&profile=" + encodeURIComponent(profile) + "&pid=" + encodeURIComponent(profileId));
     sock.onopen = () => {
         console.log("connected to Resume Work");
         startHeartbeat(sock);
@@ -186,7 +202,8 @@ function getBrowserFromBrands() {
 // The socket path below is untouched - the app still pushes "capture" to sendTabs().
 console.log(getBrowserFromBrands());
 
-getProfile().then(p => { profile = p; connectWS(); });
+// profile is set last: connectWS waits on it, so the id is in place before the first socket
+Promise.all([getProfile(), getProfileId()]).then(([p, id]) => { profileId = id; profile = p; connectWS(); });
 
 // a listener is what makes the browser start this worker when it (or a profile) opens, so a
 // browser that resume just launched connects at once and gets the rest of its tabs
